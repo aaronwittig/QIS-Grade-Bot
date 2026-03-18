@@ -332,6 +332,7 @@ export class QisCrawler {
         (h) => h.includes("prf.art") || h.includes("prüfungsart") || h.includes("art")
       );
       const idxStatus = headersLower.findIndex((h) => h.includes("status"));
+      const idxSemester = headersLower.findIndex((h) => h.includes("semester"));
 
       if (idxName === -1 || idxGrade === -1) {
         if (debug) {
@@ -365,6 +366,7 @@ export class QisCrawler {
           const grade = (cells[idxGrade] ?? "").trim();
           const prfArt = idxPrfArt !== -1 ? (cells[idxPrfArt] ?? "").trim() : "";
           const status = idxStatus !== -1 ? (cells[idxStatus] ?? "").trim() : "";
+          const semester = idxSemester !== -1 ? (cells[idxSemester] ?? "").trim() : "";
 
           if (!name) return;
 
@@ -387,7 +389,7 @@ export class QisCrawler {
             name,
             grade,
             status,
-            semester: "",
+            semester,
             date: "",
             credits: "",
           });

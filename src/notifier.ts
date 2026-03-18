@@ -50,13 +50,22 @@ export class TelegramNotifier {
     await this.sendMessage(lines.join("\n"));
   }
 
-  async sendAllGrades(grades: Record<string, Grade>): Promise<void> {
-    const list = Object.values(grades).filter(
+  async sendAllGrades(grades: Record<string, Grade>, semesterFilter?: string): Promise<void> {
+    let list = Object.values(grades).filter(
       (g) => g.grade && g.grade !== "-" && g.grade !== ""
     );
 
+    if (semesterFilter) {
+      const f = semesterFilter.toLowerCase().replace(/\s+/g, "");
+      list = list.filter((g) => g.semester.toLowerCase().replace(/\s+/g, "").includes(f));
+    }
+
     if (list.length === 0) {
-      await this.sendMessage("📭 Noch keine Noten gespeichert.");
+      await this.sendMessage(
+        semesterFilter
+          ? `📭 Keine Noten für Semester "<b>${semesterFilter}</b>" gefunden.`
+          : "📭 Noch keine Noten gespeichert."
+      );
       return;
     }
 
@@ -70,7 +79,10 @@ export class TelegramNotifier {
       return nA - nB;
     });
 
-    const lines = ["📋 <b>Alle gespeicherten Noten:</b>\n"];
+    const title = semesterFilter
+      ? `📋 <b>Noten – ${semesterFilter}:</b>\n`
+      : "📋 <b>Alle gespeicherten Noten:</b>\n";
+    const lines = [title];
     for (const g of list) {
       lines.push(`• <b>${g.name}</b>: ${g.grade}`);
     }

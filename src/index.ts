@@ -69,12 +69,15 @@ async function runCheck(
     }
   }
 
-  // Store aktualisieren — pro Modul nur die beste Note behalten
+  // Store aktualisieren — beste Note behalten, Metadaten (Semester etc.) immer aktualisieren
   const updatedGrades: Record<string, Grade> = { ...store.grades };
   for (const g of currentGrades) {
     const existing = updatedGrades[g.id];
     if (!existing || !existing.grade || existing.grade === "-" || isBetterGrade(g.grade, existing.grade)) {
       updatedGrades[g.id] = g;
+    } else {
+      // Beste Note behalten, aber Metadaten aktualisieren
+      updatedGrades[g.id] = { ...g, grade: existing.grade };
     }
   }
 
@@ -137,7 +140,7 @@ async function main(): Promise<void> {
   notifier.startPolling(async (command, args) => {
     if (command === "/noten") {
       const store = loadStore();
-      await notifier.sendAllGrades(store.grades);
+      await notifier.sendAllGrades(store.grades, args || undefined);
     } else if (command === "/durchschnitt") {
       const store = loadStore();
       await notifier.sendAverage(store.grades);
@@ -236,7 +239,8 @@ async function main(): Promise<void> {
       await notifier.sendMessage(
         `📖 <b>Verfügbare Befehle:</b>\n\n` +
         `<b>Noten</b>\n` +
-        `/noten – Alle gespeicherten Noten anzeigen\n` +
+        `/noten – Alle Noten anzeigen\n` +
+        `/noten [Semester] – Noten vom jeweiligen Semester\n` +
         `/durchschnitt – Notendurchschnitt berechnen\n` +
         `/offen – Angemeldete Prüfungen anzeigen\n` +
         `/info [Name] – Notenverteilung einer Prüfung\n` +
@@ -289,10 +293,40 @@ async function main(): Promise<void> {
   });
 
   // Sofort beim Start prüfen
+  const isFirstRun = Object.keys(loadStore().grades).length === 0;
   try {
-    await runCheck(false, onNewGrades);
+    // Beim ersten Start keine Benachrichtigung – nur Basis-Stand speichern
+    await runCheck(false, isFirstRun ? undefined : onNewGrades);
   } catch (err) {
     console.error("Fehler beim ersten Durchlauf:", err);
+  }
+
+  if (isFirstRun) {
+    const store = loadStore();
+    const count = Object.values(store.grades).filter((g) => g.grade && g.grade !== "-" && g.grade !== "").length;
+    await notifier.sendMessage(
+      `👋 <b>Willkommen beim QIS Notenbenachrichtiger!</b>\n\n` +
+      `✅ ${count} bestehende Note(n) wurden gespeichert.\n` +
+      `Ab jetzt wirst du benachrichtigt, sobald neue Noten eingetragen werden.\n\n` +
+      `📖 <b>Verfügbare Befehle:</b>\n\n` +
+      `<b>Noten</b>\n` +
+      `/noten – Alle Noten anzeigen\n` +
+      `/noten [Semester] – Noten vom jeweiligen Semester\n` +
+      `/durchschnitt – Notendurchschnitt berechnen\n` +
+      `/offen – Angemeldete Prüfungen anzeigen\n` +
+      `/info [Name] – Notenverteilung einer Prüfung\n` +
+      `/checknow – Sofort auf neue Noten prüfen\n` +
+      `/aufdecken – Neue Note mit Countdown aufdecken\n\n` +
+      `<b>Status & Konfiguration</b>\n` +
+      `/status – Bot-Status und letzte Prüfzeit\n` +
+      `/interval [Min] – Check-Intervall ändern\n` +
+      `/pause – Automatische Checks pausieren\n` +
+      `/resume – Automatische Checks fortsetzen\n` +
+      `/reset – Alle gespeicherten Noten löschen\n\n` +
+      `<b>Sonstiges</b>\n` +
+      `/echo – Prüfen ob der Bot online ist\n` +
+      `/help – Diese Hilfe anzeigen`
+    );
   }
 
   // Dann periodisch prüfen
