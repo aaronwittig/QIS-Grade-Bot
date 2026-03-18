@@ -172,6 +172,30 @@ async function main(): Promise<void> {
         await notifier.sendMessage("1️⃣");
         await sleep(1000);
         await notifier.notifyNewGrades(grades, changed);
+        await sleep(800);
+        const allRevealed = [...grades, ...changed];
+        const bestGrade = allRevealed
+          .map((g) => parseFloat(g.grade.replace(",", ".")))
+          .filter((n) => !isNaN(n))
+          .sort((a, b) => a - b)[0];
+        const hasBestanden = allRevealed.some((g) => g.grade.toLowerCase() === "bestanden");
+        let reaction = "";
+        if (bestGrade !== undefined) {
+          if (bestGrade <= 1.0)       reaction = "🏆 Eine 1,0?! Perfekt – absolut unschlagbar!";
+          else if (bestGrade <= 1.3)  reaction = "🌟 Herausragend! Das ist eine Spitzennote!";
+          else if (bestGrade <= 1.7)  reaction = "🎉 Sehr gut! Du hast das richtig gut gemacht!";
+          else if (bestGrade <= 2.0)  reaction = "👏 Stark! Eine solide 2,0 – kannst stolz sein!";
+          else if (bestGrade <= 2.3)  reaction = "😊 Gut! Weiter so!";
+          else if (bestGrade <= 2.7)  reaction = "👍 Ganz ordentlich – noch Luft nach oben!";
+          else if (bestGrade <= 3.0)  reaction = "✅ Solide Mitte – bestanden ist bestanden!";
+          else if (bestGrade <= 3.3)  reaction = "😌 Noch gut durch – Hauptsache bestanden!";
+          else if (bestGrade <= 3.7)  reaction = "😅 Knapp aber drin – du hast es geschafft!";
+          else if (bestGrade <= 4.0)  reaction = "😤 Gerade noch bestanden – beim nächsten Mal packst du das besser!";
+          else                        reaction = "😔 Leider nicht bestanden. Kopf hoch – beim nächsten Versuch klappt's!";
+        } else if (hasBestanden) {
+          reaction = "✅ Bestanden! Gut gemacht!";
+        }
+        if (reaction) await notifier.sendMessage(reaction);
       }
     } else if (command === "/status") {
       const store = loadStore();
@@ -215,6 +239,7 @@ async function main(): Promise<void> {
         `/noten – Alle gespeicherten Noten anzeigen\n` +
         `/durchschnitt – Notendurchschnitt berechnen\n` +
         `/offen – Angemeldete Prüfungen anzeigen\n` +
+        `/info [Name] – Notenverteilung einer Prüfung\n` +
         `/checknow – Sofort auf neue Noten prüfen\n` +
         `/aufdecken – Neue Note mit Countdown aufdecken\n\n` +
         `<b>Status & Konfiguration</b>\n` +
@@ -227,6 +252,34 @@ async function main(): Promise<void> {
         `/echo – Prüfen ob der Bot online ist\n` +
         `/help – Diese Hilfe anzeigen`
       );
+    } else if (command === "/info") {
+      if (!args) {
+        await notifier.sendMessage("❌ Bitte einen Prüfungsnamen angeben.\nBeispiel: <code>/info Rechnerstrukturen</code>");
+      } else {
+        await notifier.sendMessage(`🔍 Suche Notenverteilung für "<b>${args}</b>"...`);
+        try {
+          const infoCrawler = new QisCrawler();
+          await infoCrawler.login(config.username, config.password);
+          const result = await infoCrawler.fetchDistributionForGrade(args);
+
+          if (result.type === "not_found") {
+            await notifier.sendMessage(`❌ Keine Prüfung gefunden für "<b>${args}</b>".\n\nTipp: Tippe /noten um alle Prüfungsnamen zu sehen.`);
+          } else if (result.type === "multiple") {
+            const list = result.names.map((n) => `• ${n}`).join("\n");
+            await notifier.sendMessage(`⚠️ Mehrere Treffer – bitte genauer angeben:\n\n${list}`);
+          } else {
+            const lines = result.entries
+              .filter((e) => parseInt(e.count) > 0)
+              .map((e) => `<b>${e.range}</b>  →  ${e.count}`);
+            let msg = `📊 <b>Notenverteilung – ${result.examName || args}</b>\n\n${lines.join("\n")}`;
+            if (result.averageSummary) msg += `\n\n📈 ${result.averageSummary}`;
+            await notifier.sendMessage(msg);
+          }
+        } catch (err) {
+          console.error("Fehler bei /info:", err);
+          await notifier.sendMessage("❌ Fehler beim Abrufen der Notenverteilung.");
+        }
+      }
     } else if (command === "/echo") {
       await notifier.sendMessage(`✅ Bot ist online.\n🕐 ${new Date().toLocaleString("de-DE")}`);
     } else if (command === "/checknow") {

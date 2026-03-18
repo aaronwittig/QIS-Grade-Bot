@@ -110,57 +110,35 @@ export class QisCrawler {
 
   // ── Navigation ─────────────────────────────────────────────────────────────
 
-  async fetchGrades(): Promise<Grade[]> {
-    // Schritt 1: Portal-Seite laden → "Mein Studium" finden
+  private async navigateToGradesHtml(): Promise<string> {
     console.log('Navigiere zu "Mein Studium"...');
-    const $portal = await this.get(
-      `${BASE_URL}/qisserver/rds?state=user&type=0`
-    );
+    const $portal = await this.get(`${BASE_URL}/qisserver/rds?state=user&type=0`);
     const meinStudiumUrl = this.findLink($portal, "Mein Studium");
-    if (!meinStudiumUrl) {
-      throw new Error('"Mein Studium" Link nicht gefunden.');
-    }
+    if (!meinStudiumUrl) throw new Error('"Mein Studium" Link nicht gefunden.');
 
-    // Schritt 2: "Mein Studium" → "Notenspiegel / Studienverlauf" finden
     console.log('Navigiere zu "Notenspiegel / Studienverlauf"...');
     const $meinStudium = await this.get(meinStudiumUrl);
-    const notenspiegelUrl = this.findLink(
-      $meinStudium,
-      "Notenspiegel",
-      "Studienverlauf"
-    );
-    if (!notenspiegelUrl) {
-      throw new Error('"Notenspiegel / Studienverlauf" Link nicht gefunden.');
-    }
+    const notenspiegelUrl = this.findLink($meinStudium, "Notenspiegel", "Studienverlauf");
+    if (!notenspiegelUrl) throw new Error('"Notenspiegel / Studienverlauf" Link nicht gefunden.');
 
-    // Schritt 3: Notenspiegel-Seite → "Abschluss 82" ausklappen
     console.log('Klicke auf "Abschluss 82 Bachelor of Science"...');
     const $notenspiegel = await this.get(notenspiegelUrl);
-    const abschlussUrl = this.findLink(
-      $notenspiegel,
-      "Abschluss 82",
-      "Bachelor of Science"
-    );
-    if (!abschlussUrl) {
-      throw new Error('"Abschluss 82 Bachelor of Science" Link nicht gefunden.');
-    }
+    const abschlussUrl = this.findLink($notenspiegel, "Abschluss 82", "Bachelor of Science");
+    if (!abschlussUrl) throw new Error('"Abschluss 82 Bachelor of Science" Link nicht gefunden.');
 
-    // Schritt 4: Ausgeklappte Seite → Infobutton bei "Informatik (PO-Version 2017)"
     console.log('Suche Infobutton bei "Informatik (PO-Version 2017)"...');
     const $abschluss = await this.get(abschlussUrl);
-    const infoUrl = this.findInfoButton($abschluss);
-    if (!infoUrl) {
-      throw new Error(
-        'Infobutton für "Informatik (PO-Version 2017)" nicht gefunden.'
-      );
-    }
+    const gradesPageUrl = this.findInfoButton($abschluss);
+    if (!gradesPageUrl) throw new Error('Infobutton für "Informatik (PO-Version 2017)" nicht gefunden.');
 
-    // Schritt 5: Noten-Tabelle laden und parsen
-    console.log(`Lade Notentabelle von: ${infoUrl.substring(0, 100)}...`);
-    const gradesResponse = await this.client.get(infoUrl);
-    const gradesHtml = gradesResponse.data as string;
+    console.log(`Lade Notentabelle von: ${gradesPageUrl.substring(0, 100)}...`);
+    const response = await this.client.get(gradesPageUrl);
+    return response.data as string;
+  }
 
-    // Debug-Modus: HTML in Datei speichern
+  async fetchGrades(): Promise<Grade[]> {
+    const gradesHtml = await this.navigateToGradesHtml();
+
     if (process.argv.includes("--debug")) {
       const debugPath = path.join(process.cwd(), "debug_grades_list.html");
       fs.writeFileSync(debugPath, gradesHtml, "utf-8");
@@ -169,6 +147,102 @@ export class QisCrawler {
 
     const $grades = cheerio.load(gradesHtml);
     return this.parseGrades($grades);
+  }
+
+  async fetchDistributionForGrade(searchName: string): Promise<
+    | { type: "not_found" }
+    | { type: "multiple"; names: string[] }
+    | { type: "found"; examName: string; entries: Array<{ range: string; count: string }>; averageSummary: string }
+  > {
+    const gradesHtml = await this.navigateToGradesHtml();
+    const $ = cheerio.load(gradesHtml);
+
+    const matches: Array<{ name: string; semester: string; label: string; url: string }> = [];
+
+    $("table").each((_, table) => {
+      const headers: string[] = [];
+      $(table).find("th").each((_, th) => {
+        headers.push($(th).text().trim().replace(/\s+/g, " "));
+      });
+
+      const headersLower = headers.map((h) => h.toLowerCase());
+      const idxName = headersLower.findIndex((h) =>
+        h.includes("bezeichnung") || h.includes("leistung") || h.includes("modul") || h.includes("fach")
+      );
+      const idxGrade = headersLower.findIndex((h) =>
+        h === "note" || h.includes("note") || h === "ergebnis"
+      );
+      const idxSemester = headersLower.findIndex((h) => h.includes("semester"));
+
+      if (idxName === -1 || idxGrade === -1) return;
+
+      $(table).find("tr").each((rowIdx, row) => {
+        if (rowIdx === 0) return;
+
+        const cells: string[] = [];
+        $(row).find("td").each((_, td) => {
+          cells.push($(td).text().trim().replace(/\s+/g, " "));
+        });
+
+        if (cells.length < 2) return;
+        const name = (cells[idxName] ?? "").trim();
+        if (!name) return;
+
+        const semester = idxSemester !== -1 ? (cells[idxSemester] ?? "").trim() : "";
+        const label = semester ? `${name} – ${semester}` : name;
+        const searchLower = searchName.toLowerCase().replace(/-/g, "–");
+        const searchLowerAlt = searchName.toLowerCase().replace(/–/g, "-");
+        const labelLower = label.toLowerCase();
+        if (name.toLowerCase().includes(searchLower) || labelLower.includes(searchLower) || labelLower.replace(/–/g, "-").includes(searchLowerAlt)) {
+          const href =
+            $(row).find('img[alt="Notenverteilung"]').parent("a").attr("href") ??
+            $(row).find('img[title="Notenverteilung"]').parent("a").attr("href");
+          if (href) {
+            matches.push({ name, semester, label, url: this.resolve(href) });
+          }
+        }
+      });
+    });
+
+    if (matches.length === 0) return { type: "not_found" };
+    if (matches.length > 1) return { type: "multiple", names: matches.map((m) => m.label) };
+
+    const { label: examName, url: distUrl } = matches[0]!;
+    const response = await this.client.get(distUrl);
+    const $dist = cheerio.load(response.data as string);
+
+    const entries: Array<{ range: string; count: string }> = [];
+    let averageSummary = "";
+
+    $dist("table").each((_, table) => {
+      const tableText = $dist(table).text();
+      if (!tableText.toLowerCase().includes("notenbereich") && !tableText.toLowerCase().includes("notenverteilung")) return;
+
+      $dist(table).find("tr").each((_, row) => {
+        const tds = $dist(row).find("td");
+
+        // colspan-Zeilen: Durchschnittsnote-Text
+        tds.each((_, td) => {
+          const text = $dist(td).text().trim();
+          if (text.includes("Leistungen") && text.includes("Durchschnittsnote")) {
+            averageSummary = text;
+          }
+        });
+
+        if (tds.length < 2) return;
+        const c1 = $dist(tds[0]!).text().trim().replace(/\s+/g, " ");
+        const c2 = $dist(tds[1]!).text().trim().replace(/\s+/g, " ");
+
+        if (c1.toLowerCase().includes("notenbereich") || c1.toLowerCase().includes("durchschnittsnote")) return;
+
+        // Nur Zeilen die mit einer Zahl beginnen (Notenbereich)
+        if (/^\d/.test(c1)) {
+          entries.push({ range: c1, count: c2 });
+        }
+      });
+    });
+
+    return { type: "found", examName, entries, averageSummary };
   }
 
   /**
