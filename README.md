@@ -188,7 +188,8 @@ npm run check
 
 ## Hinweise
 
+- **Sei nett zum Server :)** Bitte respektiere den QIS Server und stelle das Intervall nicht auf < 15 min.
 - **Erster Start:** Alle aktuellen Noten werden gespeichert, aber **nicht** gemeldet. Ab dem zweiten Check werden nur neue oder geänderte Noten gemeldet.
-- **Nur LUH:** Das Tool ist auf das QIS der Leibniz Universität Hannover ausgelegt (Studiengang Informatik, Bachelor, PO 2017). Bei anderen Studiengängen muss ggf. `crawler.ts` angepasst werden.
-- **Datenschutz:** Zugangsdaten liegen ausschließlich lokal in der `.env`-Datei und verlassen deinen Rechner nicht.
+- **Nur LUH:** Das Tool ist auf das QIS der Leibniz Universität Hannover ausgelegt (Studiengang Informatik). Bei anderen Studiengängen muss ggf. `crawler.ts` angepasst werden.
+- **Datenschutz:** Zugangsdaten liegen ausschließlich lokal in der `.env`-Datei und verlassen deinen Rechner nicht. Für eine 24/7 Uptime würde ich **keine externen Server Provider** empfehlen, da das Passwort in Klartext gespeichert werden muss!
 - **QIS-Änderungen:** Falls die QIS-Seite ihre Struktur ändert, muss `crawler.ts` ggf. angepasst werden.
