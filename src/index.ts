@@ -14,7 +14,7 @@ function sleep(ms: number): Promise<void> {
 
 async function runCheck(
   notifyOnNoChanges = false,
-  onNewGrades?: (newGrades: Grade[], changedGrades: Grade[]) => Promise<void>
+  onNewGrades?: (newGrades: Grade[], changedGrades: Grade[], worsenedGrades: Grade[]) => Promise<void>
 ): Promise<void> {
   const config = loadConfig();
   const crawler = new QisCrawler();
@@ -40,25 +40,44 @@ async function runCheck(
 
   // Mit gespeicherten Noten vergleichen
   const store = loadStore();
-  const { newGrades, changedGrades } = detectChanges(
-    store.grades,
-    currentGrades
+
+  // Deduplizieren: pro Modul nur die beste aktuelle Note behalten (QIS zeigt alle Versuche)
+  // "bestanden"-Einträge haben immer Vorrang vor numerischen Noten (inkl. 5,0)
+  const deduped = Object.values(
+    currentGrades.reduce((acc, g) => {
+      const ex = acc[g.id];
+      const gBestanden = g.status?.toLowerCase() === "bestanden" || g.grade?.toLowerCase() === "bestanden";
+      const exBestanden = ex?.status?.toLowerCase() === "bestanden" || ex?.grade?.toLowerCase() === "bestanden";
+      if (!ex) {
+        acc[g.id] = g;
+      } else if (exBestanden) {
+        // Bestehenden "bestanden"-Eintrag behalten
+      } else if (gBestanden) {
+        // Neuer Eintrag ist "bestanden" – immer bevorzugen
+        acc[g.id] = g;
+      } else if (!ex.grade || ex.grade === "-" || isBetterGrade(g.grade, ex.grade)) {
+        acc[g.id] = g;
+      }
+      return acc;
+    }, {} as Record<string, Grade>)
   );
 
-  if (newGrades.length > 0 || changedGrades.length > 0) {
+  const { newGrades, changedGrades, worsenedGrades } = detectChanges(store.grades, deduped);
+
+  if (newGrades.length > 0 || changedGrades.length > 0 || worsenedGrades.length > 0) {
     console.log(
-      `${newGrades.length} neue, ${changedGrades.length} geänderte Note(n) gefunden!`
+      `${newGrades.length} neue, ${changedGrades.length} verbesserte, ${worsenedGrades.length} verschlechterte Note(n) gefunden!`
     );
     if (!CHECK_ONLY) {
       if (onNewGrades) {
-        await onNewGrades(newGrades, changedGrades);
+        await onNewGrades(newGrades, changedGrades, worsenedGrades);
       } else {
         await notifier.notifyNewGrades(newGrades, changedGrades);
         console.log("Telegram-Benachrichtigung gesendet.");
       }
     } else {
       console.log("(--check-only: keine Benachrichtigung gesendet)");
-      for (const g of [...newGrades, ...changedGrades]) {
+      for (const g of [...newGrades, ...changedGrades, ...worsenedGrades]) {
         console.log(`  - ${g.name}: ${g.grade} (${g.status})`);
       }
     }
@@ -71,7 +90,7 @@ async function runCheck(
 
   // Store aktualisieren — beste Note behalten, Metadaten (Semester etc.) immer aktualisieren
   const updatedGrades: Record<string, Grade> = { ...store.grades };
-  for (const g of currentGrades) {
+  for (const g of deduped) {
     const existing = updatedGrades[g.id];
     if (!existing || !existing.grade || existing.grade === "-" || isBetterGrade(g.grade, existing.grade)) {
       updatedGrades[g.id] = g;
@@ -103,13 +122,20 @@ async function main(): Promise<void> {
 
   let pendingGrades: Grade[] = [];
   let pendingChangedGrades: Grade[] = [];
+  let pendingWorsenedGrades: Grade[] = [];
 
-  const onNewGrades = async (newGrades: Grade[], changedGrades: Grade[]): Promise<void> => {
+  const onNewGrades = async (newGrades: Grade[], changedGrades: Grade[], worsenedGrades: Grade[]): Promise<void> => {
     pendingGrades.push(...newGrades);
     pendingChangedGrades.push(...changedGrades);
-    const count = newGrades.length + changedGrades.length;
+    pendingWorsenedGrades.push(...worsenedGrades);
+    const count = newGrades.length + changedGrades.length + worsenedGrades.length;
+    const moduleLines: string[] = [];
+    for (const g of newGrades) moduleLines.push(`📌 ${g.name}`);
+    for (const g of changedGrades) moduleLines.push(`📌 ${g.name} <i>(verbessert)</i>`);
+    for (const g of worsenedGrades) moduleLines.push(`📌 ${g.name} <i>(geändert)</i>`);
     await notifier.sendMessage(
       `🎓 <b>${count} neue Note(n) eingetragen!</b>\n\n` +
+      moduleLines.join("\n") + "\n\n" +
       `Tippe /aufdecken um ${count === 1 ? "die Note" : "die Noten"} zu sehen. 👀`
     );
     console.log("Telegram-Benachrichtigung gesendet.");
@@ -159,13 +185,15 @@ async function main(): Promise<void> {
         await notifier.sendMessage(lines.join("\n"));
       }
     } else if (command === "/aufdecken") {
-      if (pendingGrades.length === 0 && pendingChangedGrades.length === 0) {
+      if (pendingGrades.length === 0 && pendingChangedGrades.length === 0 && pendingWorsenedGrades.length === 0) {
         await notifier.sendMessage("📭 Keine Noten zum Aufdecken vorhanden.");
       } else {
         const grades = [...pendingGrades];
         const changed = [...pendingChangedGrades];
+        const worsened = [...pendingWorsenedGrades];
         pendingGrades = [];
         pendingChangedGrades = [];
+        pendingWorsenedGrades = [];
         await notifier.sendMessage("🥁 Gleich ist es soweit...");
         await sleep(1500);
         await notifier.sendMessage("3️⃣");
@@ -175,8 +203,9 @@ async function main(): Promise<void> {
         await notifier.sendMessage("1️⃣");
         await sleep(1000);
         await notifier.notifyNewGrades(grades, changed);
+        if (worsened.length > 0) await notifier.notifyNewGrades(worsened, []);
         await sleep(800);
-        const allRevealed = [...grades, ...changed];
+        const allRevealed = [...grades, ...changed, ...worsened];
         const bestGrade = allRevealed
           .map((g) => parseFloat(g.grade.replace(",", ".")))
           .filter((n) => !isNaN(n))
@@ -208,7 +237,7 @@ async function main(): Promise<void> {
       const lastCheck = store.lastCheck
         ? new Date(store.lastCheck).toLocaleString("de-DE")
         : "Noch nie";
-      const pending = pendingGrades.length + pendingChangedGrades.length;
+      const pending = pendingGrades.length + pendingChangedGrades.length + pendingWorsenedGrades.length;
       await notifier.sendMessage(
         `📊 <b>Bot-Status</b>\n\n` +
         `🕐 Letzter Check: ${lastCheck}\n` +

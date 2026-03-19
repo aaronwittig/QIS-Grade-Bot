@@ -43,23 +43,34 @@ export function isBetterGrade(a: string, b: string): boolean {
 export function detectChanges(
   stored: Record<string, Grade>,
   current: Grade[]
-): { newGrades: Grade[]; changedGrades: Grade[] } {
+): { newGrades: Grade[]; changedGrades: Grade[]; worsenedGrades: Grade[] } {
   const newGrades: Grade[] = [];
   const changedGrades: Grade[] = [];
+  const worsenedGrades: Grade[] = [];
 
   for (const grade of current) {
     const hasGrade = grade.grade && grade.grade !== "-" && grade.grade !== "";
     if (!hasGrade) continue;
 
     const existing = stored[grade.id];
+
+    // Modul bereits als "bestanden" gespeichert → keine weiteren Änderungen melden
+    // (verhindert false positives wenn QIS alte 5,0-Versuche neben "bestanden" zeigt)
+    if (existing?.status?.toLowerCase() === "bestanden" || existing?.grade?.toLowerCase() === "bestanden") {
+      continue;
+    }
+
     if (!existing || !existing.grade || existing.grade === "-") {
       // Noch gar keine Note gespeichert
       newGrades.push(grade);
     } else if (isBetterGrade(grade.grade, existing.grade)) {
       // Bessere Note als bisher gespeichert (z.B. Wiederholungsprüfung)
       changedGrades.push(grade);
+    } else if (isBetterGrade(existing.grade, grade.grade)) {
+      // Schlechtere Note als bisher gespeichert (z.B. Korrektur)
+      worsenedGrades.push(grade);
     }
   }
 
-  return { newGrades, changedGrades };
+  return { newGrades, changedGrades, worsenedGrades };
 }
